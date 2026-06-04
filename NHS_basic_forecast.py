@@ -41,6 +41,8 @@ from utils import (
     _ENGLAND_BANK_HOLIDAYS,
     _clean_name, clean_column_names, _mse,
     fetch_weather, load_weather,
+    wx_feature_cols, _MEAN3_BASE_COLS,
+    load_forecast_weather, build_fc_wx_wide,
     PartialElasticNetCV,
 )
 
@@ -50,9 +52,8 @@ warnings.filterwarnings("ignore")
 # Paths & model-specific constants
 # ---------------------------------------------------------------------------
 
-DATA_PATH       = Path("data/turingAI_forecasting_challenge_dataset.csv")
-GLOBAL_SEL_PATH = Path("model_outputs/global_feature_selection.csv")
-OUTPUT_DIR      = Path("model_outputs")
+DATA_PATH  = Path("data/turingAI_forecasting_challenge_dataset.csv")
+OUTPUT_DIR = Path("model_outputs")
 
 HOLDOUT_START = pd.Timestamp("2024-10-01")
 HORIZON       = 10
@@ -65,47 +66,13 @@ USE_PARTIAL = "--partial"    in sys.argv
 NO_WX       = "--no-wx"     in sys.argv
 EAD_SMOOTH  = "--ead-smooth" in sys.argv
 
-_DOW_NAMES  = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat"]
-_CAL_NAMES  = _DOW_NAMES + ["is_holiday", "is_day_after_holiday"]
-_MEAN3_BASE = ["wx_coldness", "wx_hotness", "wx_coldness2"]
+_sel_tag        = "nwx_global" if NO_WX else "global"
+GLOBAL_SEL_PATH = Path(f"model_outputs/{_sel_tag}_feature_selection.csv")
 
-# Base NWP columns stored in the forecast-weather CSV; derived columns
-# (wx_coldness2, wx_heavy_rain) are computed at load time.
-_WX_BASE_COLS = [
-    "wx_coldness", "wx_hotness", "wx_below_freezing",
-    "wx_rain_sum", "wx_snowfall_sum", "wx_wind_max",
-]
-wx_feature_cols = _WX_BASE_COLS + ["wx_coldness2", "wx_heavy_rain"]
+_DOW_NAMES = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat"]
+_CAL_NAMES = _DOW_NAMES + ["is_holiday", "is_day_after_holiday"]
 
 _DAY_AFTER_HOLIDAYS = {d + pd.Timedelta(days=1) for d in _ENGLAND_BANK_HOLIDAYS}
-
-# ---------------------------------------------------------------------------
-# NWP forecast weather (model-specific: reads pre-cached CSV and derives
-# wx_coldness2/wx_heavy_rain from the base NWP values)
-# ---------------------------------------------------------------------------
-
-
-def _load_fc_wx_wide(path: Path) -> pd.DataFrame | None:
-    if not path.exists():
-        print("  NWP forecast weather cache not found — using actual weather.")
-        return None
-    df = pd.read_csv(path, parse_dates=["date"])
-    parts = [
-        df[df["lead_day"] == lead]
-        .set_index("date")[_WX_BASE_COLS]
-        .rename(columns={c: f"{c}_L{lead}" for c in _WX_BASE_COLS})
-        for lead in range(1, MAX_FC_LEAD + 1)
-    ]
-    wide = pd.concat(parts, axis=1)
-    for lead in range(1, MAX_FC_LEAD + 1):
-        wide[f"wx_rain_sum_L{lead}"]   = wide[f"wx_rain_sum_L{lead}"].clip(upper=RAIN_CAP)
-        wide[f"wx_wind_max_L{lead}"]   = wide[f"wx_wind_max_L{lead}"].clip(upper=WIND_CAP)
-        # wx_coldness2 = max(0, COLD_THRESH2 − T) = max(0, wx_coldness − (10 − COLD_THRESH2))
-        wide[f"wx_coldness2_L{lead}"]  = (wide[f"wx_coldness_L{lead}"] - (10 - COLD_THRESH2)).clip(lower=0)
-        wide[f"wx_heavy_rain_L{lead}"] = (wide[f"wx_rain_sum_L{lead}"] > HEAVY_RAIN_THRESH).astype(int)
-    print(f"  NWP forecast weather loaded: {len(wide)} dates × {MAX_FC_LEAD} lead days")
-    return wide
-
 
 # ---------------------------------------------------------------------------
 # Rolling-loop weather/mean3 helpers
@@ -191,8 +158,8 @@ def run_rolling(train_win: int, use_partial: bool = False, use_wx: bool = True, 
 
     Returns (pred_matrix, actual_matrix, origin_dates, forecast_dates, coef_records).
     """
-    wx_cols    = wx_feature_cols if use_wx else []
-    mean3_cols = _MEAN3_BASE     if use_wx else []
+    wx_cols    = wx_feature_cols  if use_wx else []
+    mean3_cols = _MEAN3_BASE_COLS if use_wx else []
     cal_cols   = _CAL_NAMES      if use_wx else _DOW_NAMES
     n             = len(forecasting_df)
     window_starts = range(0, n - (train_win + HORIZON) + 1, STRIDE)
@@ -220,9 +187,9 @@ def run_rolling(train_win: int, use_partial: bool = False, use_wx: bool = True, 
 
         op_preds = [p for p in GLOBAL_OP_FEATURES if train[p].std() > 0]
         if use_ead_smooth:
-            for _col in (f"{OUTCOME}_mean7_3", f"{OUTCOME}_mean28_3"):
-                if _col not in op_preds and train[_col].std() > 0:
-                    op_preds = op_preds + [_col]
+            _col = f"{OUTCOME}_mean7_3"
+            if _col not in op_preds and train[_col].std() > 0:
+                op_preds = op_preds + [_col]
         feat_names  = op_preds + cal_cols + wx_cols + [f"{c}_mean3" for c in mean3_cols]
         X_op_origin = train[op_preds].iloc[[-1]].to_numpy(dtype=float)
 
@@ -332,7 +299,6 @@ def save_outputs(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
     sys.stdout.reconfigure(line_buffering=True)
 
     print("Loading operational data…")
@@ -395,7 +361,10 @@ if __name__ == "__main__":
     )
     print(f"  Weather features added: {wx_feature_cols}")
 
-    fc_wx_wide = _load_fc_wx_wide(FORECAST_WX_PATH)
+    fc_wx_wide = None
+    if not NO_WX:
+        _fc_wx_df  = load_forecast_weather(FORECAST_WX_PATH)
+        fc_wx_wide = build_fc_wx_wide(_fc_wx_df) if _fc_wx_df is not None else None
 
     # ---- NWP weather log ---------------------------------------------------
     if fc_wx_wide is not None:

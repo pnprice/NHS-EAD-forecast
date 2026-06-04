@@ -363,7 +363,7 @@ def main() -> None:
         })
     sel_df = pd.DataFrame(sel_rows).sort_values("n_selected", ascending=False)
     sel_df.to_csv(OUTPUT_DIR / f"{MODEL_TAG}_feature_selection.csv", index=False)
-    print(f"\n  Selection summary saved to model_outputs/global_feature_selection.csv")
+    print(f"\n  Selection summary saved to model_outputs/{MODEL_TAG}_feature_selection.csv")
 
     # ========================================================================
     # PHASE 2 — GLOBAL FIT
