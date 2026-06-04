@@ -176,28 +176,27 @@ def main() -> None:
     # 3. WEATHER
     # ========================================================================
 
-    weather = load_weather()
-    t_mean  = weather["temperature_2m_mean"]
-    t_min   = weather["temperature_2m_min"]
-    weather["wx_coldness"]       = (10 - t_mean).clip(lower=0)
-    weather["wx_hotness"]        = (t_mean - 25).clip(lower=0)
-    weather["wx_below_freezing"] = (t_min < 0).astype(float)
-    weather["wx_rain_sum"]       = weather["rain_sum"].clip(upper=RAIN_CAP)
-    weather["wx_snowfall_sum"]   = weather["snowfall_sum"]
-    weather["wx_wind_max"]       = weather["wind_speed_10m_max"].clip(upper=WIND_CAP)
-    weather["wx_coldness2"]      = (COLD_THRESH2 - t_mean).clip(lower=0)
-    weather["wx_heavy_rain"]     = (weather["rain_sum"] > HEAVY_RAIN_THRESH).astype(int)
-
-    forecasting_df = forecasting_df.merge(
-        weather[["date"] + wx_feature_cols], on="date", how="left"
-    )
-
-    print("  Loading NWP forecast weather…")
-    _fc_wx_df  = load_forecast_weather()
-    fc_wx_wide = build_fc_wx_wide(_fc_wx_df) if _fc_wx_df is not None else None
-    if fc_wx_wide is not None:
-        print(f"  NWP forecast lookup ready: "
-              f"{len(fc_wx_wide)} valid dates, lead days 1–{MAX_FC_LEAD}")
+    fc_wx_wide = None
+    if not NO_WX:
+        weather = load_weather()
+        t_mean  = weather["temperature_2m_mean"]
+        t_min   = weather["temperature_2m_min"]
+        weather["wx_coldness"]       = (10 - t_mean).clip(lower=0)
+        weather["wx_hotness"]        = (t_mean - 25).clip(lower=0)
+        weather["wx_below_freezing"] = (t_min < 0).astype(float)
+        weather["wx_rain_sum"]       = weather["rain_sum"].clip(upper=RAIN_CAP)
+        weather["wx_snowfall_sum"]   = weather["snowfall_sum"]
+        weather["wx_wind_max"]       = weather["wind_speed_10m_max"].clip(upper=WIND_CAP)
+        weather["wx_coldness2"]      = (COLD_THRESH2 - t_mean).clip(lower=0)
+        weather["wx_heavy_rain"]     = (weather["rain_sum"] > HEAVY_RAIN_THRESH).astype(int)
+        forecasting_df = forecasting_df.merge(
+            weather[["date"] + wx_feature_cols], on="date", how="left"
+        )
+        _fc_wx_df  = load_forecast_weather()
+        fc_wx_wide = build_fc_wx_wide(_fc_wx_df) if _fc_wx_df is not None else None
+        if fc_wx_wide is not None:
+            print(f"  NWP forecast lookup ready: "
+                  f"{len(fc_wx_wide)} valid dates, lead days 1–{MAX_FC_LEAD}")
 
     # ========================================================================
     # 4. CALENDAR INDICATORS

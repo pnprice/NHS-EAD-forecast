@@ -344,25 +344,23 @@ if __name__ == "__main__":
     print(f"  Feature columns after per-hospital pivot: {len(deduped)}")
 
     # ---- Weather -----------------------------------------------------------
-    weather = load_weather()
-    t_mean = weather["temperature_2m_mean"]
-    t_min  = weather["temperature_2m_min"]
-    weather["wx_coldness"]       = (10 - t_mean).clip(lower=0)
-    weather["wx_hotness"]        = (t_mean - 25).clip(lower=0)
-    weather["wx_below_freezing"] = (t_min < 0).astype(int)
-    weather["wx_rain_sum"]       = weather["rain_sum"].clip(upper=RAIN_CAP)
-    weather["wx_snowfall_sum"]   = weather["snowfall_sum"]
-    weather["wx_wind_max"]       = weather["wind_speed_10m_max"].clip(upper=WIND_CAP)
-    weather["wx_coldness2"]      = (COLD_THRESH2 - t_mean).clip(lower=0)
-    weather["wx_heavy_rain"]     = (weather["rain_sum"] > HEAVY_RAIN_THRESH).astype(int)
-
-    forecasting_df = forecasting_df.merge(
-        weather[["date"] + wx_feature_cols], on="date", how="left"
-    )
-    print(f"  Weather features added: {wx_feature_cols}")
-
     fc_wx_wide = None
     if not NO_WX:
+        weather = load_weather()
+        t_mean = weather["temperature_2m_mean"]
+        t_min  = weather["temperature_2m_min"]
+        weather["wx_coldness"]       = (10 - t_mean).clip(lower=0)
+        weather["wx_hotness"]        = (t_mean - 25).clip(lower=0)
+        weather["wx_below_freezing"] = (t_min < 0).astype(int)
+        weather["wx_rain_sum"]       = weather["rain_sum"].clip(upper=RAIN_CAP)
+        weather["wx_snowfall_sum"]   = weather["snowfall_sum"]
+        weather["wx_wind_max"]       = weather["wind_speed_10m_max"].clip(upper=WIND_CAP)
+        weather["wx_coldness2"]      = (COLD_THRESH2 - t_mean).clip(lower=0)
+        weather["wx_heavy_rain"]     = (weather["rain_sum"] > HEAVY_RAIN_THRESH).astype(int)
+        forecasting_df = forecasting_df.merge(
+            weather[["date"] + wx_feature_cols], on="date", how="left"
+        )
+        print(f"  Weather features added: {wx_feature_cols}")
         _fc_wx_df  = load_forecast_weather(FORECAST_WX_PATH)
         fc_wx_wide = build_fc_wx_wide(_fc_wx_df) if _fc_wx_df is not None else None
 
@@ -400,9 +398,8 @@ if __name__ == "__main__":
     forecasting_df = pd.concat(
         [forecasting_df, pd.DataFrame(rolling_cols, index=forecasting_df.index)], axis=1
     )
-    forecasting_df[f"{OUTCOME}_lag3"]     = forecasting_df[OUTCOME].shift(3)
-    forecasting_df[f"{OUTCOME}_mean7_3"]  = forecasting_df[OUTCOME].shift(3).rolling(5).mean()
-    forecasting_df[f"{OUTCOME}_mean28_3"] = forecasting_df[OUTCOME].shift(3).rolling(28).mean()
+    forecasting_df[f"{OUTCOME}_lag3"]    = forecasting_df[OUTCOME].shift(3)
+    forecasting_df[f"{OUTCOME}_mean7_3"] = forecasting_df[OUTCOME].shift(3).rolling(5).mean()
     forecasting_df = forecasting_df.dropna().reset_index(drop=True)
 
     predictors = [c for c in forecasting_df.columns if c not in ("date", OUTCOME)]
