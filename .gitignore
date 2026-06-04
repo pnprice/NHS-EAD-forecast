@@ -1,0 +1,29 @@
+# R
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.idea/
+
+# Large data files (contest dataset, not redistributable)
+data/turingAI_forecasting_challenge_dataset.csv
+
+# Model output intermediates (large, reproducible)
+model_outputs/
+
+# Generated plots
+Plots/
+
+# Root-level duplicate submission files
+mse_summary.csv
+pred_matrix.csv

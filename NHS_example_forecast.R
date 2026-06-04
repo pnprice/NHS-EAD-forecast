@@ -4,7 +4,6 @@ library(e1071)
 library(imputeTS)
 library(zoo)
 
-setwd("/Users/alexrabeau/Desktop/SPHERE/NHS-AD-forecasting")
 
 # ============================================================================
 # 1. LOAD DATA + PREPROCESSING
