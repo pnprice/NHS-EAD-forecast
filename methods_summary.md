@@ -78,13 +78,23 @@ These capture smooth annual seasonality without discretising by month. Bank holi
 
 ---
 
-## 4. Feature Selection (Phase 1)
+## 4. Feature Selection
 
-To prevent noise-chasing with $p \approx 1{,}060$ predictors, a stable operational feature set is identified before fitting final models.
+To prevent noise-chasing with $p \approx 1{,}060$ predictors, stable operational feature sets are identified before fitting final models via two parallel Phase 1 selection procedures.
 
-A standard ElasticNet with 5-fold cross-validation ($\rho = 0.5$) is fitted on 57 rolling 120-day windows (14-day stride) for each of the 10 forecast horizons. The frequency with which each predictor receives a non-zero coefficient is recorded across all 570 fits.
+A standard ElasticNet with 5-fold cross-validation ($\rho = 0.5$) is fitted on rolling 120-day windows (14-day stride) for each of the 10 forecast horizons. The frequency with which each predictor receives a non-zero coefficient is recorded across all fits.
 
-**Selection.** The top 20 operational predictors by frequency seed an expansion: all hospital variants (BRI/NBT/WGH) of any selected metric name are included, subject to a 5% frequency floor. This yields approximately 36 operational predictors. Calendar and Fourier features are always forced in [and potentially weather variables].
+**Selection.** The top 20 operational predictors by frequency seed an expansion: all hospital variants (BRI/NBT/WGH) of any selected metric name are included, subject to a 5% frequency floor.
+
+### Phase 1a — Global model features
+
+Selection runs on the **global development period** only (data up to September 2024 in validation mode; up to September 2025 in assessment mode), using 31 windows. This prevents feature selection leakage into the holdout period. Approximately 38 operational predictors are selected. Calendar and Fourier features are always forced in.
+
+### Phase 1b — Basic model features
+
+Selection runs on the **full development period** (data up to September 2025), using 57 windows. Because the basic model refits coefficients on a rolling 90-day window at each origin, using the broader selection period causes no coefficient leakage even in validation mode. Approximately 36 operational predictors are selected.
+
+In assessment mode both procedures operate on the same data and produce the same feature set.
 
 ---
 
@@ -92,7 +102,7 @@ A standard ElasticNet with 5-fold cross-validation ($\rho = 0.5$) is fitted on 5
 
 ### 5.1 Basic Rolling Model
 
-One ElasticNet is fit per (window, horizon) pair on a rolling window of $W = 90$ days.
+One ElasticNet is fit per (window, horizon) pair on a rolling window of $W = 90$ days, using **Phase 1b** features.
 
 **Feature vector at origin $t$, horizon $h$:**
 $$\mathbf{x}^{(h)}_t = \bigl[\underbrace{\mathbf{x}^{\text{op}}_{t}}_{\text{operational [+ weather]}},\; \underbrace{\mathbf{x}^{\text{cal}}_{t+h}}_{\text{calendar + Fourier}}\bigr]$$
@@ -101,7 +111,7 @@ where $\mathbf{x}^{\text{op}}_t$ contains the selected operational features (raw
 
 ### 5.2 Global Partial-Penalty Model
 
-The global model fits on the full development period (~923 days), partitioning features into **structural** (calendar + Fourier [+ weather]) and **operational** groups. Structural features are estimated by OLS on the full history; operational features receive an ElasticNet penalty. This is solved by block coordinate descent (**PartialElasticNetCV**):
+The global model fits on the full global development period (~558 days), using **Phase 1a** features, partitioning features into **structural** (calendar + Fourier) and **operational** groups. Structural features are estimated by OLS on the full history; operational features receive an ElasticNet penalty. This is solved by block coordinate descent (**PartialElasticNetCV**):
 
 $$\boldsymbol{\beta}_s \leftarrow \arg\min \|\mathbf{y} - \mathbf{X}_s\boldsymbol{\beta}_s - \mathbf{X}_{\text{op}}\boldsymbol{\beta}_{\text{op}}\|_2^2 \quad \text{(OLS)}$$
 
@@ -109,23 +119,27 @@ $$\boldsymbol{\beta}_{\text{op}} \leftarrow \arg\min \|\mathbf{y} - \mathbf{X}_s
 
 $\alpha$ is initialised from ElasticNetCV; a **monotone floor** ($\alpha_h \geq \alpha_1$) ensures longer-horizon models are at least as regularised as the 1-day model.
 
-### 5.3 Ensemble
+### 5.3 Horizon-Split Prediction Strategy
 
-$$\hat{y}^{\text{ens}}_{t+h} = \tfrac{1}{2}\hat{y}^{\text{basic}}_{t+h} + \tfrac{1}{2}\hat{y}^{\text{global}}_{t+h}$$
+The two models are combined differently depending on the forecast horizon:
 
-The rolling model adapts to recent operational regime shifts; the global model contributes stable seasonal estimates.
+- **Days 1–5:** Basic rolling model only. At short horizons the rolling window adapts quickly to recent operational regime, and the global model's stable seasonal signal adds limited value.
+- **Days 6–10:** 50/50 ensemble of global and basic models.
+
+$$\hat{y}^{\text{ens}}_{t+h} = \tfrac{1}{2}\hat{y}^{\text{basic}}_{t+h} + \tfrac{1}{2}\hat{y}^{\text{global}}_{t+h} \quad (h = 6, \ldots, 10)$$
+
+At longer horizons the global model's stable seasonal estimates are more valuable relative to recent operational noise.
 
 ---
 
 ## 6. Results
 
-Holdout evaluation on 355 windows, October 2024 – September 2025 (global model trained on data through September 2024):
+Holdout evaluation on 355 windows, October 2024 – September 2025 (global model trained on data through September 2024, basic model features selected on data through September 2025):
 
-| Model | Mean MSE 1–5 | Median MSE 1–5 | Mean MSE 6–10 | Median MSE 6–10 |
-|---|---|---|---|---|
-| Basic w90 | 0.0899 | 0.0549 | 0.1122 | 0.0725 |
-| Global (Phase 3) | 0.1075 | 0.0392 | 0.1281 | 0.0467 |
-| **Ensemble** | **0.0965** | **0.0490** | **0.1068** | **0.0559** |
+| Horizon | Mean MSE | Median MSE |
+|---|---|---|
+| Days 1–5 | 0.0965 | 0.0567 |
+| Days 6–10 | 0.1059 | 0.0524 |
 
 The mean/median gap (~2×) reflects a fat-tailed error distribution: a small number of winter-crisis windows (cold snaps, flu/norovirus surges) produce large underpredictions that inflate the mean while the median tracks typical-day performance.
 
@@ -133,4 +147,11 @@ The mean/median gap (~2×) reflects a fat-tailed error distribution: a small num
 
 ## 7. Algorithm
 
-The algorithm is implemented as a single script, `run_forecast.py`. It loads the dataset, applies all preprocessing and feature engineering, performs Phase 1 selection and Phase 2 global fitting on development data, then for each origin date refits the basic rolling model and averages the two predictions. `python run_forecast.py` generates assessment forecasts; `python run_forecast.py --validate` evaluates on the holdout period.
+The algorithm is implemented as a single script, `run_forecast.py` (with helper functions in `utils.py`). It loads the dataset, applies all preprocessing and feature engineering, then performs:
+
+1. **Phase 1a** — feature selection for the global model on global development data
+2. **Phase 1b** — feature selection for the basic model on the full development period (short-circuited to Phase 1a in assessment mode where both periods coincide)
+3. **Phase 2** — global partial-penalty model fit (one model per horizon, Phase 1a features)
+4. **Rolling prediction loop** — for each origin date, refits the basic rolling ElasticNet (Phase 1b features); final prediction uses basic model alone for h=1–5 and a 50/50 ensemble of basic and global for h=6–10
+
+Run `python run_forecast.py` to generate assessment forecasts; `python run_forecast.py --validate` to evaluate on the holdout period (October 2024 – September 2025).
