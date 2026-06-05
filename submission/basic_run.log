@@ -1,2 +1,0 @@
-/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:301: UserWarning: resource_tracker: There appear to be 2 leaked semaphore objects to clean up at shutdown: {'/loky-72213-wh8yxmuc', '/loky-72213-dkjv3nwc'}
-  warnings.warn(
