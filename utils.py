@@ -43,8 +43,8 @@ COLD_THRESH2      =  5.0   # °C   — wx_coldness2 = max(0, COLD_THRESH2 − T)
 HEAVY_RAIN_THRESH = 20.0   # mm   — wx_heavy_rain = (rain > threshold)
 
 # Prediction output bounds
-PRED_MAX       = 1.75   # hard upper cap on predicted avoidable deaths
-FLOOR_LOOKBACK = 60     # days of recent EAD history used for lower floor
+PRED_MAX       = 10.0   # effectively no upper cap (actual EAD never exceeds ~2.2)
+FLOOR_LOOKBACK = 90     # days of recent EAD history used for lower floor (5th-percentile)
 
 # England bank holidays covering the development and assessment periods.
 # Source: https://www.gov.uk/bank-holidays (England and Wales).

@@ -92,7 +92,8 @@ STRIDE_EVAL    = 1
 
 _DAY_AFTER_HOLIDAYS = {d + pd.Timedelta(days=1) for d in _ENGLAND_BANK_HOLIDAYS}
 _DOW_NAMES = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat"]
-_CAL_COLS  = set(_DOW_NAMES) | {"is_holiday", "is_day_after_holiday"}
+_FOURIER_NAMES = ["sin1_annual", "cos1_annual", "sin2_annual", "cos2_annual"]
+_CAL_COLS      = set(_DOW_NAMES) | {"is_holiday", "is_day_after_holiday"} | set(_FOURIER_NAMES)
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +214,13 @@ def main() -> None:
         forecasting_df["date"].isin(_DAY_AFTER_HOLIDAYS).astype(float)
     )
 
+    # ---- Fourier annual seasonality ----------------------------------------
+    _doy = forecasting_df["date"].dt.dayofyear
+    forecasting_df["sin1_annual"] = np.sin(2 * np.pi * _doy / 365.25)
+    forecasting_df["cos1_annual"] = np.cos(2 * np.pi * _doy / 365.25)
+    forecasting_df["sin2_annual"] = np.sin(4 * np.pi * _doy / 365.25)
+    forecasting_df["cos2_annual"] = np.cos(4 * np.pi * _doy / 365.25)
+
     # ========================================================================
     # 5. IMPUTE
     # ========================================================================
@@ -245,7 +253,8 @@ def main() -> None:
         [forecasting_df, pd.DataFrame(rolling_cols, index=forecasting_df.index)],
         axis=1,
     )
-    forecasting_df[f"{OUTCOME}_lag3"] = forecasting_df[OUTCOME].shift(3)
+    forecasting_df[f"{OUTCOME}_lag3"]    = forecasting_df[OUTCOME].shift(3)
+    forecasting_df[f"{OUTCOME}_mean7_3"] = forecasting_df[OUTCOME].shift(3).rolling(5).mean()
     forecasting_df = forecasting_df.dropna().reset_index(drop=True)
 
     predictors = [c for c in forecasting_df.columns if c not in ("date", OUTCOME)]
@@ -255,11 +264,12 @@ def main() -> None:
         print(f"  [--no-wx] Excluding weather and bank holiday features")
     print(f"  Total predictors (incl. rolling + lag): {len(predictors)}")
 
+    metric_name_map[f"{OUTCOME}_lag3"]    = OUTCOME
+    metric_name_map[f"{OUTCOME}_mean7_3"] = OUTCOME
     for base_col in list(metric_name_map.keys()):
         for suffix in ("_roll_mean7", "_roll_sd7"):
             if base_col + suffix in forecasting_df.columns:
                 metric_name_map[base_col + suffix] = metric_name_map[base_col]
-    metric_name_map[f"{OUTCOME}_lag3"] = OUTCOME
 
     # ========================================================================
     # 7. SKEWNESS CORRECTION
@@ -456,7 +466,7 @@ def main() -> None:
 
             floor_end   = origin_idx - 2
             floor_start = max(0, floor_end - FLOOR_LOOKBACK)
-            obs_floor   = float(forecasting_df[OUTCOME].iloc[floor_start:floor_end].min())
+            obs_floor   = float(forecasting_df[OUTCOME].iloc[floor_start:floor_end].quantile(0.05))
 
             X_op_o = forecasting_df[op_selected].iloc[[origin_idx]].to_numpy(dtype=float)
             for h in range(1, HORIZON + 1):
@@ -582,7 +592,8 @@ def main() -> None:
     print(f"  Mean MSE   (days 6–10): {mse_ho_df['mse_6_10'].mean():.4f}")
     print(f"  Median MSE (days 6–10): {mse_ho_df['mse_6_10'].median():.4f}")
 
-    basic_mse_path = OUTPUT_DIR / "basic_mse_summary.csv"
+    _basic_tag     = "nwx_basic_esmooth_w90" if NO_WX else "basic_w90"
+    basic_mse_path = OUTPUT_DIR / f"{_basic_tag}_mse_summary.csv"
     if basic_mse_path.exists():
         basic_all = pd.read_csv(basic_mse_path, parse_dates=["origin_date"])
         basic_ho  = basic_all[basic_all["origin_date"] > TRAIN_CUTOFF]
@@ -593,7 +604,7 @@ def main() -> None:
         print(f"  Median MSE (days 6–10): {basic_ho['mse_6_10'].median():.4f}")
 
     print(f"\nTotal elapsed: {time.time() - t0:.0f}s")
-    print("Outputs written to model_outputs/global_*.csv")
+    print(f"Outputs written to model_outputs/{MODEL_TAG}_*.csv")
 
 
 if __name__ == "__main__":

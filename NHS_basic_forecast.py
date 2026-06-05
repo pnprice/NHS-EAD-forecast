@@ -70,7 +70,8 @@ _sel_tag        = "nwx_global" if NO_WX else "global"
 GLOBAL_SEL_PATH = Path(f"model_outputs/{_sel_tag}_feature_selection.csv")
 
 _DOW_NAMES = ["dow_mon", "dow_tue", "dow_wed", "dow_thu", "dow_fri", "dow_sat"]
-_CAL_NAMES = _DOW_NAMES + ["is_holiday", "is_day_after_holiday"]
+_CAL_NAMES     = _DOW_NAMES + ["is_holiday", "is_day_after_holiday"]
+_FOURIER_NAMES = ["sin1_annual", "cos1_annual", "sin2_annual", "cos2_annual"]
 
 _DAY_AFTER_HOLIDAYS = {d + pd.Timedelta(days=1) for d in _ENGLAND_BANK_HOLIDAYS}
 
@@ -160,7 +161,7 @@ def run_rolling(train_win: int, use_partial: bool = False, use_wx: bool = True, 
     """
     wx_cols    = wx_feature_cols  if use_wx else []
     mean3_cols = _MEAN3_BASE_COLS if use_wx else []
-    cal_cols   = _CAL_NAMES      if use_wx else _DOW_NAMES
+    cal_cols   = (_CAL_NAMES if use_wx else _DOW_NAMES) + _FOURIER_NAMES
     n             = len(forecasting_df)
     window_starts = range(0, n - (train_win + HORIZON) + 1, STRIDE)
     n_fc          = len(window_starts)
@@ -198,11 +199,11 @@ def run_rolling(train_win: int, use_partial: bool = False, use_wx: bool = True, 
             penalty_mask = np.concatenate([np.ones(len(op_preds), dtype=bool),
                                            np.zeros(n_struct, dtype=bool)])
 
-        # Lower floor: min observable EAD over FLOOR_LOOKBACK days before origin.
+        # Lower floor: 5th-percentile of EAD over FLOOR_LOOKBACK days before origin.
         # 3-day reporting lag means the last observable EAD is at origin_idx − 3.
         floor_end   = origin_idx - 2          # exclusive; last included = origin_idx − 3
         floor_start = max(0, floor_end - FLOOR_LOOKBACK)
-        obs_floor   = float(forecasting_df[OUTCOME].iloc[floor_start:floor_end].min())
+        obs_floor   = float(forecasting_df[OUTCOME].iloc[floor_start:floor_end].quantile(0.05))
 
         for h in range(1, HORIZON + 1):
             X_op  = train[op_preds].iloc[: train_win - h].to_numpy(dtype=float)
@@ -376,6 +377,13 @@ if __name__ == "__main__":
     forecasting_df["is_holiday"]           = forecasting_df["date"].isin(_ENGLAND_BANK_HOLIDAYS).astype(float)
     forecasting_df["is_day_after_holiday"] = forecasting_df["date"].isin(_DAY_AFTER_HOLIDAYS).astype(float)
 
+    # ---- Fourier annual seasonality ----------------------------------------
+    _doy = forecasting_df["date"].dt.dayofyear
+    forecasting_df["sin1_annual"] = np.sin(2 * np.pi * _doy / 365.25)
+    forecasting_df["cos1_annual"] = np.cos(2 * np.pi * _doy / 365.25)
+    forecasting_df["sin2_annual"] = np.sin(4 * np.pi * _doy / 365.25)
+    forecasting_df["cos2_annual"] = np.cos(4 * np.pi * _doy / 365.25)
+
     # ---- Impute ------------------------------------------------------------
     predictor_cols = [c for c in forecasting_df.columns if c not in ("date", OUTCOME)]
     for col in predictor_cols:
@@ -389,6 +397,7 @@ if __name__ == "__main__":
         c for c in predictor_cols
         if not c.startswith("dow_") and not c.startswith("wx_")
         and c not in ("is_holiday", "is_day_after_holiday")
+        and c not in _FOURIER_NAMES
     ]
     rolling_cols: dict[str, pd.Series] = {}
     for var in roll_candidates:
@@ -408,7 +417,8 @@ if __name__ == "__main__":
     # ---- Skewness correction -----------------------------------------------
     skip_transform = {c for c in predictors
                       if c.startswith("dow_") or c.startswith("wx_")
-                      or c in ("is_holiday", "is_day_after_holiday")}
+                      or c in ("is_holiday", "is_day_after_holiday")
+                      or c in _FOURIER_NAMES}
     for col in predictors:
         if col in skip_transform:
             continue
