@@ -4,9 +4,15 @@ run_forecast.py
 Single entry point for the NHS EAD forecasting ensemble.
 
 Trains on all available development data (up to 30 Sep 2025), then generates
-predictions for each origin in the target window as the 50/50 ensemble of:
-  - Global Partial-Penalty model (Phase 1 feature selection + Phase 2 global fit)
-  - Rolling 90-day ElasticNet (refitted at each origin)
+predictions for each origin in the target window using a horizon-split strategy:
+  - Days 1–5:  Rolling 90-day ElasticNet, basic only (Phase 1b features, full dev period)
+  - Days 6–10: 50/50 ensemble of Global Partial-Penalty model (Phase 1a) + Rolling ElasticNet (Phase 1b)
+
+Two Phase 1 feature selections are run:
+  Phase 1a (global model): limited to GLOBAL_DEV_END to prevent leakage in --validate mode.
+  Phase 1b (basic model):  always uses the full development period (DEV_END); the basic model
+                           refits on rolling 90-day windows so Phase 1b data range adds no
+                           leakage to model coefficients.
 
 No weather or bank-holiday features are used.
 
@@ -258,6 +264,59 @@ pd.DataFrame(sel_rows).sort_values("n_selected", ascending=False).to_csv(
 )
 
 # ---------------------------------------------------------------------------
+# 2b. PHASE 1b — FEATURE SELECTION FOR BASIC MODEL (full dev period)
+# ---------------------------------------------------------------------------
+# In --validate mode GLOBAL_DEV_END < DEV_END, so Phase 1b sees more data
+# (57 vs 31 windows) and produces a more stable operational feature set.
+# In assessment mode both cutoffs are identical, so we skip the duplicate run.
+
+if GLOBAL_DEV_END < DEV_END:
+    df_basic_dev = df[df["date"] <= DEV_END].reset_index(drop=True)
+    n_basic_dev  = len(df_basic_dev)
+    window_starts_basic = list(range(0, n_basic_dev - (SELECT_WIN + HORIZON) + 1, STRIDE_SEL))
+    n_basic_sel    = len(window_starts_basic)
+    total_slots_b  = n_basic_sel * HORIZON
+
+    print(f"\n=== Phase 1b: Feature selection for basic model (full dev period) ===")
+    print(f"  Windows: {n_basic_sel}  (train={SELECT_WIN}, stride={STRIDE_SEL})")
+
+    sel_counts_b: dict[str, int] = {}
+    for w, i in enumerate(window_starts_basic):
+        if w % 10 == 0:
+            print(f"  [{w + 1}/{n_basic_sel}]  elapsed {time.time() - t0:.0f}s")
+        train_b1     = df_basic_dev.iloc[i : i + SELECT_WIN]
+        valid_preds_b = [p for p in predictors if train_b1[p].std() > 0]
+        for h in range(1, HORIZON + 1):
+            X = train_b1[valid_preds_b].iloc[: SELECT_WIN - h].to_numpy(dtype=float)
+            y = train_b1[OUTCOME].iloc[h:].to_numpy(dtype=float)
+            scaler = StandardScaler()
+            model  = ElasticNetCV(
+                l1_ratio=L1_RATIO, cv=5, max_iter=10_000, n_jobs=-1, random_state=123,
+            )
+            model.fit(scaler.fit_transform(X), y)
+            for p, c in zip(valid_preds_b, model.coef_):
+                if c != 0.0:
+                    sel_counts_b[p] = sel_counts_b.get(p, 0) + 1
+
+    seed_preds_b   = sorted(candidate_preds,
+                            key=lambda p: sel_counts_b.get(p, 0), reverse=True)[:N_TOP]
+    seed_metrics_b = {metric_name_map.get(p) for p in seed_preds_b if metric_name_map.get(p)}
+    freq_thresh_b  = FREQ_FLOOR * total_slots_b
+    basic_expanded_ops = [
+        p for p in candidate_preds
+        if metric_name_map.get(p) in seed_metrics_b
+        and sel_counts_b.get(p, 0) >= freq_thresh_b
+    ]
+    basic_expanded_ops.sort(key=lambda p: sel_counts_b.get(p, 0), reverse=True)
+    if f"{OUTCOME}_mean7_3" not in basic_expanded_ops:
+        basic_expanded_ops.append(f"{OUTCOME}_mean7_3")
+
+    print(f"  Phase 1b complete. Operational selected: {len(basic_expanded_ops)}")
+else:
+    basic_expanded_ops = expanded_ops
+    print("  Phase 1b: same data as Phase 1a — reusing features")
+
+# ---------------------------------------------------------------------------
 # 3. PHASE 2 — GLOBAL FIT (development data only)
 # ---------------------------------------------------------------------------
 
@@ -333,35 +392,34 @@ for j, origin_idx in enumerate(origin_rows):
     # Global: operational features at origin, calendar features at each target day
     X_op_g = df[op_sel].iloc[[origin_idx]].to_numpy(dtype=float)
 
-    # Basic: operational features at end of 90-day window
-    win_start  = origin_idx - TRAIN_WIN + 1
-    train_b    = df.iloc[win_start : origin_idx + 1]
-    op_b       = [p for p in expanded_ops if train_b[p].std() > 0]
-    X_op_b_org = train_b[op_b].iloc[[-1]].to_numpy(dtype=float)
+    # Basic: 90-day rolling window
+    win_start = origin_idx - TRAIN_WIN + 1
+    train_b   = df.iloc[win_start : origin_idx + 1]
 
     for h in range(1, HORIZON + 1):
-        # --- Global prediction ---
-        mdl_g, scl_g = global_models[h]
-        X_cal_g      = df[cal_sel].iloc[[origin_idx + h]].to_numpy(dtype=float)
-        pred_g       = mdl_g.predict(scl_g.transform(np.hstack([X_op_g, X_cal_g])))[0]
-
-        # --- Basic rolling prediction ---
-        X_op_b  = train_b[op_b].iloc[: TRAIN_WIN - h].to_numpy(dtype=float)
-        X_cal_b = df[cal_sel].iloc[win_start + h : origin_idx + 1].to_numpy(dtype=float)
-        y_b     = train_b[OUTCOME].iloc[h:].to_numpy(dtype=float)
-
         X_cal_b_o = df[cal_sel].iloc[[origin_idx + h]].to_numpy(dtype=float)
-        X_or_b    = np.hstack([X_op_b_org, X_cal_b_o])
+        X_cal_b   = df[cal_sel].iloc[win_start + h : origin_idx + 1].to_numpy(dtype=float)
+        y_b       = train_b[OUTCOME].iloc[h:].to_numpy(dtype=float)
 
-        scaler_b = StandardScaler()
-        enet_b   = ElasticNetCV(
-            l1_ratio=L1_RATIO, cv=5, max_iter=10_000, n_jobs=-1, random_state=123,
-        )
+        # Basic rolling prediction (Phase 1b features throughout)
+        op_b_h     = [p for p in basic_expanded_ops if train_b[p].std() > 0]
+        X_op_b     = train_b[op_b_h].iloc[: TRAIN_WIN - h].to_numpy(dtype=float)
+        X_op_b_org = train_b[op_b_h].iloc[[-1]].to_numpy(dtype=float)
+        X_or_b     = np.hstack([X_op_b_org, X_cal_b_o])
+        scaler_b   = StandardScaler()
+        enet_b     = ElasticNetCV(l1_ratio=L1_RATIO, cv=5, max_iter=10_000, n_jobs=-1, random_state=123)
         enet_b.fit(scaler_b.fit_transform(np.nan_to_num(np.hstack([X_op_b, X_cal_b]))), y_b)
-        pred_b = enet_b.predict(scaler_b.transform(np.nan_to_num(X_or_b)))[0]
+        pred_b     = enet_b.predict(scaler_b.transform(np.nan_to_num(X_or_b)))[0]
 
-        # --- Ensemble ---
-        raw_pred = (pred_g + pred_b) / 2
+        if h <= 5:
+            raw_pred = pred_b
+        else:
+            # Add global model (Phase 1a features) for long horizons
+            mdl_g, scl_g = global_models[h]
+            X_cal_g      = df[cal_sel].iloc[[origin_idx + h]].to_numpy(dtype=float)
+            pred_g       = mdl_g.predict(scl_g.transform(np.hstack([X_op_g, X_cal_g])))[0]
+            raw_pred     = (pred_g + pred_b) / 2
+
         pred_mat[j, h - 1] = float(np.clip(raw_pred, obs_floor, PRED_MAX))
 
 print("  Prediction complete.")

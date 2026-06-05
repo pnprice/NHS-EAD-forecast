@@ -1,0 +1,58 @@
+Loading data…
+  348 feature columns after per-hospital pivot
+  Total predictors (incl. rolling + lag): 1056
+
+=== Phase 1: Feature selection ===
+  Windows: 31  (train=120, stride=14)
+  [1/31]  elapsed 17s
+  [11/31]  elapsed 38s
+  [21/31]  elapsed 66s
+  [31/31]  elapsed 91s
+  Phase 1 complete. 908 predictors ever selected.
+  Forced structural: 10
+  Operational selected: 38
+  Total: 48
+
+=== Phase 1b: Feature selection for basic model (full dev period) ===
+  Windows: 57  (train=120, stride=14)
+  [1/57]  elapsed 93s
+  [11/57]  elapsed 115s
+  [21/57]  elapsed 142s
+  [31/57]  elapsed 168s
+  [41/57]  elapsed 189s
+  [51/57]  elapsed 211s
+  Phase 1b complete. Operational selected: 36
+
+=== Phase 2: Global fit (558 rows, 48 features) ===
+  h= 1: alpha=0.01489, nonzero=22/38  (225s elapsed)
+  h= 2: alpha=0.03788, nonzero=7/38  (225s elapsed)
+  h= 3: alpha=0.02676, nonzero=8/38  (225s elapsed)
+  h= 4: alpha=0.01489 → floored from 0.01430, nonzero=12/38  (225s elapsed)
+  h= 5: alpha=0.01489 → floored from 0.01244, nonzero=17/38  (226s elapsed)
+  h= 6: alpha=0.01489 → floored from 0.01079, nonzero=15/38  (226s elapsed)
+  h= 7: alpha=0.01489 → floored from 0.01156, nonzero=13/38  (226s elapsed)
+  h= 8: alpha=0.03643, nonzero=5/38  (226s elapsed)
+  h= 9: alpha=0.01755, nonzero=13/38  (226s elapsed)
+  h=10: alpha=0.01638, nonzero=16/38  (226s elapsed)
+  Global fitting complete.
+
+=== Predictions: 355 origins (2024-10-01 – 2025-09-30) ===
+  [1/355]  elapsed 226s
+  [51/355]  elapsed 270s
+  [101/355]  elapsed 342s
+  [151/355]  elapsed 415s
+  [201/355]  elapsed 470s
+  [251/355]  elapsed 522s
+  [301/355]  elapsed 579s
+  [351/355]  elapsed 660s
+  Prediction complete.
+
+Total elapsed: 668s
+Outputs written to submission/
+
+*** MSE — holdout (355 windows) ***
+  Mean MSE   days 1–5:  0.0965
+  Median MSE days 1–5:  0.0567
+  Mean MSE   days 6–10: 0.1059
+  Median MSE days 6–10: 0.0524
+  Periods: 2024-10-01 – 2025-09-20
